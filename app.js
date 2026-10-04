@@ -24,11 +24,40 @@
     forgot: ['あれ？ここ前にもぶつかったクマ…', 'わすれてたクマ〜！', 'また同じ壁クマ…はずかしいクマ'],
     collect: ['みつけたクマ〜！', 'やったクマ！', 'ふーさんの鼻はするどいクマ！', 'いただきクマ！'],
     stop: ['ここで止まっとくクマ', '無理はしないクマ', 'ちょっと様子見クマ'],
-    gift: ['足もとにあったクマ！？', 'ラッキーだクマ！']
+    gift: ['足もとにあったクマ！？', 'ラッキーだクマ！'],
+    wall: ['ここに置くクマ！', 'えいっ、壁クマ', 'ここは通さないクマ〜', 'いじわるな場所に置いたクマ', 'ふーさん特製の壁クマ'],
+    spinOk: ['回った回数、ちゃんと数えたクマ！', 'ぐるぐる…でもおぼえてるクマ', '目は回ったけど迷路は回ってないクマ…あれ？'],
+    spinNg: ['…何回まわったか、わからなくなったクマ', 'ぐるぐる〜目が回ったクマ〜', 'あれ？どっちが上だったクマ？']
   };
   var WALL_OPTS = [{ v: 24, l: '24枚', s: '公式' }, { v: 19, l: '19枚', s: '公式のかんたん' }];
   var BUMP_OPTS = [{ v: false, l: 'なし', s: '公式・おぼえる' }, { v: true, l: 'あり', s: 'かんたん' }];
   var CPU_OPTS = [{ v: 'easy', l: 'やさしい', s: 'ときどき忘れる' }, { v: 'normal', l: 'ふつう', s: '' }, { v: 'strong', l: 'つよい', s: '全部おぼえる' }];
+  var BUILD_OPTS = [{ v: 'random', l: 'ランダム', s: '標準' }, { v: 'build', l: 'みんなで決める', s: '順番に1枚ずつ' }];
+  var PEEK_OPTS = [{ v: 0, l: 'なし', s: '' }, { v: 5, l: '5秒', s: '' }, { v: 10, l: '10秒', s: '標準' }, { v: 20, l: '20秒', s: '' }];
+  var SPIN_OPTS = [{ v: 'none', l: 'なし', s: '' }, { v: 'rot', l: '回転', s: '90°×1〜3回' }, { v: 'flip', l: '回転＋反転', s: '裏返しもあり' }];
+  // 回転アニメの時間（ホストと参加者で同じ計算）
+  var SPIN_LEAD = 450, SPIN_STEP = 650, SPIN_PAUSE = 170, SPIN_FLIP = 750, SPIN_TAIL = 650;
+  function spinTotal(sp) { return SPIN_LEAD + sp.n * (SPIN_STEP + SPIN_PAUSE) + (sp.flip ? SPIN_FLIP + SPIN_PAUSE : 0) + SPIN_TAIL; }
+  function ease(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
+  // 経過時間 → { angle, sx, done（終わった回数）, phase, op }
+  function spinState(sp, t) {
+    var st = { angle: 0, sx: 1, done: 0, phase: 'lead', op: 1 }, x = t - SPIN_LEAD;
+    if (x < 0) return st;
+    for (var i = 0; i < sp.n; i++) {
+      if (x < SPIN_STEP) { st.phase = 'rot'; st.angle = sp.dir * 90 * (i + ease(x / SPIN_STEP)); st.done = i; return st; }
+      x -= SPIN_STEP; st.done = i + 1; st.angle = sp.dir * 90 * (i + 1);
+      if (x < SPIN_PAUSE) { st.phase = 'rot'; return st; }
+      x -= SPIN_PAUSE;
+    }
+    if (sp.flip) {
+      if (x < SPIN_FLIP) { st.phase = 'flip'; st.sx = Math.cos(Math.PI * ease(x / SPIN_FLIP)); return st; }
+      x -= SPIN_FLIP; st.sx = -1;
+      if (x < SPIN_PAUSE) { st.phase = 'flip'; return st; }
+      x -= SPIN_PAUSE;
+    }
+    st.phase = 'tail'; st.op = Math.max(0, 1 - x / SPIN_TAIL);
+    return st;
+  }
   var HB_MS = 3000, LOST_MS = 10000, MAXP = 4;
   var LS_ID = 'lb-online-client-id', LS_NAME = 'lb-online-name', LS_HOST = 'lb-online-host-room', SS_CLIENT = 'lb-online-joined', LS_SOUND = 'lb-online-sound';
 
@@ -104,6 +133,10 @@
       bonk: function () { tone(140, 0, 0.3, 'sine', 0.6, 45); noise(0, 0.15, 0.45, 600); },
       drop: function () { tone(1200, 0, 0.6, 'triangle', 0.12, 180); [0.62, 0.82, 0.95, 1.04].forEach(function (t, i) { tone(380 - i * 30, t, 0.07, 'square', 0.09 - i * 0.015); }); },
       collect: function () { [784, 988, 1175, 1568].forEach(function (f, i) { tone(f, i * 0.09, 0.3, 'triangle', 0.16); }); tone(2093, 0.4, 0.5, 'sine', 0.08); },
+      place: function () { tone(220, 0, 0.12, 'square', 0.08, 160); noise(0, 0.08, 0.35, 1400); },
+      tick: function (last) { tone(last ? 1320 : 880, 0, 0.08, 'sine', 0.14); },
+      hide: function () { [1568, 1175, 988, 784, 587].forEach(function (f, i) { tone(f, i * 0.07, 0.25, 'sine', 0.07); }); },
+      whoosh: function () { noise(0, 0.5, 0.25, 700); tone(300, 0, 0.5, 'sine', 0.08, 600); },
       win: function () { [523, 659, 784, 1047, 784, 1047].forEach(function (f, i) { tone(f, i * 0.14, 0.32, 'triangle', 0.18); }); }
     };
   })();
@@ -119,7 +152,7 @@
   function hostId(code) { return ID_PREFIX + code; }
   function newRoom(name) {
     return {
-      code: genCode(), phase: 'lobby', opts: { walls: 24, bumps: false, cpu: 'normal' }, nextSid: 2, gameNo: 0,
+      code: genCode(), phase: 'lobby', opts: { walls: 24, bumps: false, cpu: 'normal', build: 'random', peek: 10, spin: 'none' }, nextSid: 2, gameNo: 0,
       seats: [{ sid: 1, name: name, kind: 'host', clientId: myId, connected: true }],
       pids: null, G: null, log: [], evId: 0, ev: null, created: Date.now()
     };
@@ -129,7 +162,8 @@
     host = { room: resumeRoom || newRoom(name), conns: {}, lastSeen: {}, timer: null, tries: 0, opened: false, cpuPlan: null };
     if (resumeRoom) {
       host.room.seats.forEach(function (s) { if (s.kind === 'remote') s.connected = false; });
-      if (host.room.phase === 'play') addLog('🔄 ホストが部屋を再開しました');
+      if (host.room.phase !== 'lobby') addLog('🔄 ホストが部屋を再開しました');
+      host.room.opts = Object.assign({ build: 'random', peek: 10, spin: 'none' }, host.room.opts);
     }
     connecting(true, resumeRoom ? '部屋を再開しています…' : '部屋を作っています…', 'シグナリングサーバーに接続中', function () { location.href = location.pathname; });
     openHostPeer();
@@ -176,6 +210,14 @@
     if (msg.t === 'ping') return;
     if (msg.t === 'lobbyReq') return hostLobbyReq(seat);
     if (msg.t === 'abort') return;   // 中断できるのはホストだけ
+    if (msg.t === 'build') {
+      if (R.phase !== 'build' || !R.B || seat.kind !== 'remote') return;
+      if (msg.seq !== R.B.seq) return conn.send({ t: 'buildErr', msg: 'ほかの人の操作と重なりました。もう一度どうぞ' });
+      if (msg.kind !== 'place' && msg.kind !== 'undo') return;
+      var bres = hostBuild(R.pids.indexOf(seat.sid), msg.kind, +msg.e);
+      if (bres) conn.send({ t: 'buildErr', msg: bres.msg, cut: bres.cut || null, e: bres.e });
+      return;
+    }
     if (msg.t === 'act') {
       if (R.phase !== 'play' || !R.G || R.G.over) return;
       var i = R.pids.indexOf(seat.sid);
@@ -252,12 +294,100 @@
     renumberCpus();
     R.gameNo++;
     R.pids = R.seats.map(function (s) { return s.sid; });
-    R.G = MG.createGame({ players: n, walls: R.opts.walls });
-    R.phase = 'play'; R.ev = null; R.log = []; R.lobbyReq = null;
+    R.G = null; R.B = null; R.intro = null; R.ev = null; R.log = []; R.lobbyReq = null;
     host.cpuPlan = null;
-    addLog('🎯 さいしょのしるし：' + symTxt(R.G.target));
-    addLog('🌙 ゲーム開始！ 迷路の地下に見えない壁が' + R.opts.walls + '枚…。最初は ' + san(who(seatOfP(R.G.turn))) + ' から（いちばん最近道に迷った人…のかわりにくじ引き）');
+    if (R.opts.build === 'build') {
+      // みんなで壁を決める：くじで決めた人から順番に1枚ずつ（ふーさん🐻は自動）
+      R.phase = 'build';
+      R.B = { walls: [], by: [], target: R.opts.walls, turn: Math.floor(Math.random() * n), seq: 0 };
+      addLog('🧱 迷路づくり！ 順番に1枚ずつ、すき間をタップして壁を置こう（全部で' + R.B.target + '枚）。最初は ' + san(who(seatOfP(R.B.turn))));
+      hostBroadcast(); hostSchedule();
+      return;
+    }
+    hostBeginGame(null);
+  }
+  // 壁が決まったらゲームを作る → （見せる時間）→（回転）→ プレイ
+  function hostBeginGame(B) {
+    var R = host.room, n = R.pids.length;
+    var G = MG.createGame({ players: n, walls: R.opts.walls, wallList: B ? B.walls : null });
+    var secs = R.opts.peek | 0, seen = !!B || secs > 0;
+    var sp = seen ? MG.makeSpin(R.opts.spin, Math.random) : null;   // 一度も壁を見ていないなら回しても意味がないので回さない
+    if (seen) {
+      var mine = {}; if (B) B.by.forEach(function (p, k) { if (p >= 0) (mine[p] = mine[p] || []).push(B.walls[k]); });
+      MG.setupIntro(G, { shown: G.walls, xf: sp, secs: secs, built: !!B, mine: mine });
+    }
+    R.G = G; R.B = null; R.ev = null;
+    addLog('🎯 さいしょのしるし：' + symTxt(G.target));
+    if (secs > 0) {
+      R.phase = 'preview'; R.intro = { kind: 'preview', start: Date.now(), ms: secs * 1000, secs: secs, spin: sp };
+      addLog('👀 迷路を' + secs + '秒だけ見せます。よーく覚えて！' + (sp ? '（このあと迷路が回ります）' : ''));
+    } else if (sp) hostSpin(sp);
+    else hostPlay();
     hostBroadcast(); hostSchedule();
+  }
+  function hostSpin(sp) {
+    var R = host.room;
+    R.phase = 'spin'; R.intro = { kind: 'spin', start: Date.now(), ms: spinTotal(sp), spin: sp };
+    addLog('🌀 迷路がまわる…！ 何回まわるか数えて！');
+  }
+  function hostPlay() {
+    var R = host.room, G = R.G, sp = R.intro && R.intro.spin, wasIntro = !!R.intro;
+    R.phase = 'play'; R.intro = null;
+    if (sp) {
+      addLog('🌀 迷路は' + (sp.dir > 0 ? '右回り↻' : '左回り↺') + 'に' + sp.n + '回' + (sp.flip ? '、さらに左右反転' : '') + '。しるしと角はそのまま、地下の壁だけが動きました');
+      // ふーさん🐻：回転をちゃんと数えられたかどうか（人間と同じく、見えたものだけで判断）
+      var lines = [];
+      R.pids.forEach(function (sid, i) {
+        var s = seatBySid(sid); if (!s || s.kind !== 'cpu' || s.replaced) return;
+        var b = MG.cpuIntroBelief(G.introInfo, i, R.opts.cpu, R.gameNo * 1009 + s.sid * 7919, 1);
+        lines.push({ p: i, line: pick(b && b.wrong ? LINES.spinNg : LINES.spinOk) });
+      });
+      if (lines.length) R.ev = { type: 'spun', lines: lines, id: ++R.evId, at: Date.now(), seq: G.seq };
+    } else if (wasIntro) addLog('🌫️ 壁が見えなくなりました');
+    addLog('🌙 ゲーム開始！ 迷路の地下に見えない壁が' + G.walls.length + '枚…。最初は ' + san(who(seatOfP(G.turn))) + ' から（いちばん最近道に迷った人…のかわりにくじ引き）');
+  }
+  function hostIntroNext() {
+    var R = host.room;
+    if (R.phase === 'preview' && R.intro.spin) hostSpin(R.intro.spin);
+    else if (R.phase === 'preview' || R.phase === 'spin') hostPlay();
+    else return;
+    hostBroadcast(); hostSchedule();
+  }
+  // 迷路づくりの操作（p＝プレイヤー番号。'fill' はホストだけ）。だめなときは { msg, cut } を返す
+  function hostBuild(p, kind, e) {
+    var R = host.room, B = R.B; if (R.phase !== 'build' || !B) return null;
+    var n = R.pids.length;
+    if (kind === 'place') {
+      if (p !== B.turn) return { msg: 'いまは' + san(who(seatOfP(B.turn))) + 'の番です' };
+      var c = MG.checkWall(B.walls, e, B.target);
+      if (!c.ok) return { msg: c.why === 'cut' ? 'そこに置くと、たどり着けないマスが' + c.cut.length + 'つできてしまいます。どのマスにも行けるように、ほかのすき間を選んでね' : c.why === 'used' ? 'そこにはもう壁があります' : 'そこには置けません', cut: c.cut || null, e: e };
+      B.walls.push(e); B.by.push(p); B.seq++;
+      var seat = seatOfP(p), line = seat.kind === 'cpu' ? pick(LINES.wall) : '';
+      R.ev = { type: 'wall', p: p, e: e, line: line, id: ++R.evId, at: Date.now() };
+      addLog('🧱 ' + who(seat) + 'が壁を置いた（' + B.walls.length + '/' + B.target + '）' + (line ? '「' + line + '」' : ''));
+      if (B.walls.length >= B.target) { addLog('🏰 迷路が完成！'); hostBeginGame(B); return null; }
+      B.turn = (B.turn + 1) % n;
+    } else if (kind === 'undo') {
+      var k = B.walls.length - 1;
+      if (k < 0 || B.by[k] !== p) return { msg: '取り消せるのは、自分が最後に置いた壁だけです（次の人が置くまで）' };
+      var ue = B.walls.pop(); B.by.pop(); B.turn = p; B.seq++;
+      R.ev = { type: 'unwall', p: p, e: ue, id: ++R.evId, at: Date.now() };
+      addLog('↩️ ' + who(seatOfP(p)) + 'が壁を取り消した（' + B.walls.length + '/' + B.target + '）');
+    } else if (kind === 'fill') {
+      var before = B.walls.length;
+      B.walls = MG.fillWalls(B.walls, B.target, Math.random);
+      while (B.by.length < B.walls.length) B.by.push(-1);
+      addLog('🎲 のこり' + (B.walls.length - before) + '枚をランダムで埋めました');
+      addLog('🏰 迷路が完成！');
+      hostBeginGame(B); return null;
+    } else return null;
+    hostBroadcast(); hostSchedule();
+    return null;
+  }
+  function hostCpuBuild() {
+    var R = host.room, B = R.B, ok = [];
+    for (var e = 0; e < MG.EDGES; e++) if (MG.checkWall(B.walls, e, B.target).ok) ok.push(e);
+    if (ok.length) hostBuild(B.turn, 'place', pick(ok));
   }
   function hostAct(kind, dir) {
     var R = host.room, G = R.G;
@@ -306,7 +436,19 @@
   function hostSchedule() {
     clearTimeout(host.timer);
     var R = host.room, G = R.G;
-    if (!host.opened || R.phase !== 'play' || !G || G.over) return;
+    if (!host.opened) return;
+    if ((R.phase === 'preview' || R.phase === 'spin') && R.intro) {
+      var intro = R.intro;
+      host.timer = setTimeout(function () { if (R.intro === intro) hostIntroNext(); }, Math.max(0, intro.start + intro.ms - Date.now()));
+      return;
+    }
+    if (R.phase === 'build' && R.B) {
+      var bs = seatOfP(R.B.turn), bseq = R.B.seq, B0 = R.B;
+      if (!bs || bs.kind !== 'cpu') return;
+      host.timer = setTimeout(function () { if (R.phase === 'build' && R.B === B0 && B0.seq === bseq) hostCpuBuild(); }, TURBO ? 120 : 1000);
+      return;
+    }
+    if (R.phase !== 'play' || !G || G.over) return;
     var seat = seatOfP(G.turn);
     if (!seat || seat.kind !== 'cpu') return;
     var seq = G.seq, wait = 0;
@@ -341,27 +483,39 @@
     R.seats.forEach(function (s, i) { if (s.sid === sid) you = i; });
     var v = {
       t: 'state', phase: R.phase, code: R.code, you: you, sid: sid, gameNo: R.gameNo,
-      opts: { walls: R.opts.walls, bumps: !!R.opts.bumps, cpu: R.opts.cpu },
+      opts: { walls: R.opts.walls, bumps: !!R.opts.bumps, cpu: R.opts.cpu, build: R.opts.build, peek: R.opts.peek, spin: R.opts.spin },
       seats: R.seats.map(function (s) { return { sid: s.sid, name: s.name, kind: s.kind, connected: s.kind !== 'remote' || s.connected, replaced: !!s.replaced }; }),
       log: R.log.slice(0, 6), notice: R.notice || null
     };
     if (sid === 1 && R.lobbyReq && R.phase !== 'lobby') v.lobbyReq = R.lobbyReq;
+    if (R.phase !== 'lobby' && R.pids) v.pids = R.pids.slice();
+    if (R.phase === 'build' && R.B) {
+      // 迷路づくりの間は、置いた壁をみんなに見せる（組み立て中なので見えてよい）
+      v.b = { walls: R.B.walls.map(function (e, k) { return { e: e, p: R.B.by[k] }; }), target: R.B.target, turn: R.B.turn, seq: R.B.seq };
+      v.ev = R.ev;
+      return v;
+    }
     if (R.phase !== 'lobby' && G) {
       var P = MG.publicView(G);
       delete P.pub;                                         // 通った道・ぶつかった壁の履歴は送らない（覚えるのはプレイヤーの仕事）
       P.pids = R.pids.slice();
       P.hitCount = P.players.map(function (_, i) { return G.hits.filter(function (h) { return h.by === i; }).length; });
       if (R.opts.bumps || G.over) P.bumps = G.hits.map(function (h) { return { e: h.e, by: h.by }; });   // 「あり（かんたん）」のときだけ
-      if (G.over) P.walls = G.walls.slice();                // 壁の配置はゲーム終了後にだけ公開
+      if (G.over) { P.walls = G.walls.slice(); if (G.xf) P.spin = { n: G.xf.n, dir: G.xf.dir, flip: !!G.xf.flip }; }   // 壁の配置はゲーム終了後にだけ公開
       v.g = P;
       v.ev = R.ev;
+      // はじめに迷路を見せる時間・回転アニメの間だけ、回転前の壁を送る（プレイが始まったら送らない）
+      if ((R.phase === 'preview' || R.phase === 'spin') && R.intro && G.introInfo) {
+        v.intro = { kind: R.intro.kind, left: Math.max(0, R.intro.start + R.intro.ms - Date.now()), ms: R.intro.ms, secs: R.intro.secs || 0, walls: G.introInfo.shown.slice() };
+        if (R.intro.kind === 'spin') v.intro.spin = { n: R.intro.spin.n, dir: R.intro.spin.dir, flip: !!R.intro.spin.flip };
+      }
     }
     return v;
   }
   // ---- 中断してロビーへ（ホストのみ） ----
   function hostToLobby(msg) {
     var R = host.room;
-    clearTimeout(host.timer); R.phase = 'lobby'; R.G = null; R.pids = null; R.ev = null; host.cpuPlan = null;
+    clearTimeout(host.timer); R.phase = 'lobby'; R.G = null; R.B = null; R.intro = null; R.pids = null; R.ev = null; host.cpuPlan = null;
     R.seats = R.seats.filter(function (s) {
       if (s.kind === 'cpu' && s.replaced) {
         if (s.clientId && host.conns[s.clientId] && host.conns[s.clientId].open) { s.kind = 'remote'; s.replaced = false; s.connected = true; s.left = false; return true; }
@@ -423,6 +577,9 @@
   optSeg('wallSeg', 'walls', function (v) { return +v; });
   optSeg('bumpSeg', 'bumps', function (v) { return v === 'true'; });
   optSeg('cpuSeg', 'cpu', function (v) { return v; });
+  optSeg('buildSeg', 'build', function (v) { return v === 'build' ? 'build' : 'random'; });
+  optSeg('peekSeg', 'peek', function (v) { return [0, 5, 10, 20].indexOf(+v) >= 0 ? +v : 10; });
+  optSeg('spinSeg', 'spin', function (v) { return ['none', 'rot', 'flip'].indexOf(v) >= 0 ? v : 'none'; });
   $('startBtn').onclick = function () { if (host) hostStartGame(); };
   $('againBtn').onclick = function () { if (host && host.room.phase === 'end') hostStartGame(); };
   $('toLobbyBtn').onclick = function () { if (host && host.room.phase === 'end') hostToLobby('ロビーに戻りました'); };
@@ -488,12 +645,22 @@
       connecting(false); banner('');
       sstore(SS_CLIENT, { code: client.code, name: client.name });
     } else if (m.t === 'state') {
+      // 見せる時間・迷路づくりが終わったら、受け取った壁のデータを手元から消す
+      if (m.phase === 'play' || m.phase === 'lobby') scrubWalls();
       received.push(m); if (received.length > 5000) received.shift();
       render(m);
     } else if (m.t === 'reject') { connecting(false); toast(m.msg); leaveClient(false); alertBox(m.msg); }
     else if (m.t === 'kicked') { sstore(SS_CLIENT, null); leaveClient(false); alertBox('ホストによって部屋から外されました。'); }
     else if (m.t === 'closed') { sstore(SS_CLIENT, null); leaveClient(false); alertBox('ホストが部屋を閉じました。'); }
     else if (m.t === 'error') toast(m.msg);
+    else if (m.t === 'buildErr') { buildLock = ''; showBuildErr(m); if (lastView) render(lastView); }
+  }
+  function scrubWalls() {
+    for (var i = 0; i < received.length; i++) {
+      var o = received[i];
+      if (o.intro) delete o.intro;
+      if (o.b) delete o.b;
+    }
   }
   function clientHeartbeat() {
     if (!client) return;
@@ -524,7 +691,7 @@
   // ---- 操作 ----
   var lastView = null, actLock = '';
   function lockKey(v) { return v && v.g ? v.gameNo + ':' + v.g.seq : ''; }   // ゲームごとに seq は 0 から数え直すので、ゲーム番号と組にする
-  function myP(v) { return v && v.g ? v.g.pids.indexOf(v.sid) : -1; }
+  function myP(v) { var pids = v && (v.pids || (v.g && v.g.pids)); return pids ? pids.indexOf(v.sid) : -1; }
   function myTurn(v) { return v && v.phase === 'play' && v.g && !v.g.over && v.g.turn === myP(v) && v.seats[v.you] && v.seats[v.you].kind !== 'cpu'; }
   function sendAct(kind, dir) {
     var v = lastView; if (!myTurn(v) || actLock === lockKey(v)) return;
@@ -544,6 +711,36 @@
     return true;
   }
   function clientCanStop(g, me) { return g && g.stage === 'move' && !othersAt(g, me, g.players[me].pos); }
+  // ---- 迷路づくりの操作 ----
+  var buildLock = '';
+  function showBuildErr(r) {
+    toast(r.msg);
+    if (r.cut && r.cut.length) {
+      var cells = $('board').querySelectorAll('.cell');
+      r.cut.forEach(function (c) { var ce = cells[c]; if (!ce) return; ce.classList.remove('cutfx'); void ce.offsetWidth; ce.classList.add('cutfx'); setTimeout(function () { ce.classList.remove('cutfx'); }, 1600); });
+    }
+    if (r.e != null) { var g = $('board').querySelector('.gap[data-e="' + r.e + '"]'); if (g) { g.classList.remove('nofx'); void g.offsetWidth; g.classList.add('nofx'); setTimeout(function () { g.classList.remove('nofx'); }, 1000); } }
+  }
+  function sendBuild(kind, e) {
+    var v = lastView; if (!v || v.phase !== 'build' || !v.b) return;
+    var me = myP(v), key = v.gameNo + ':' + v.b.seq;
+    if (me < 0 || v.seats[v.you].kind === 'cpu' || buildLock === key) return;
+    var walls = v.b.walls.map(function (w) { return w.e; });
+    if (kind === 'place') {
+      if (v.b.turn !== me) { toast('いまは' + san(who(seatOfView(v, v.b.turn))) + 'の番です'); return; }
+      var c = MG.checkWall(walls, e, v.b.target);
+      if (!c.ok) { showBuildErr({ msg: c.why === 'cut' ? 'そこに置くと、たどり着けないマスが' + c.cut.length + 'つできてしまいます。どのマスにも行けるように、ほかのすき間を選んでね' : 'そこにはもう壁があります', cut: c.cut, e: e }); return; }
+    }
+    Snd.unlock();
+    if (host) { var r = hostBuild(me, kind, e); if (r) showBuildErr(r); return; }
+    if (client && client.conn && client.conn.open) { buildLock = key; client.conn.send({ t: 'build', kind: kind, e: e, seq: v.b.seq }); }
+  }
+  $('board').addEventListener('click', function (e) { var g = e.target.closest('.gap'); if (g && !g.classList.contains('on')) sendBuild('place', +g.dataset.e); });
+  $('undoBtn').onclick = function () { sendBuild('undo'); };
+  $('fillBtn').onclick = function () {
+    if (!host || host.room.phase !== 'build') return;
+    confirmBox('のこりをランダムで埋めますか？', 'まだ置いていない壁を、どのマスにも行けるようにランダムで置いて、迷路を完成させます。', 'ランダムで埋める', function () { hostBuild(-1, 'fill'); });
+  };
   $('die').onclick = function () { sendAct('roll'); };
   $('stopBtn').onclick = function () { sendAct('stop'); };
   $('dpad').addEventListener('click', function (e) { var b = e.target.closest('button[data-d]'); if (b) sendAct('step', b.dataset.d); });
@@ -602,9 +799,14 @@
   function render(v) {
     lastView = v; window.__lb.view = v;
     abortUi(v);
+    introUi(v);
     if (v.phase === 'lobby') { show('lobby'); renderLobby(v); lastEvId = null; return; }
     handleEvent(v);
-    if (v.phase === 'play') { clearTimeout(endTimer); show('game'); renderGame(v); return; }
+    if (v.phase === 'play' || v.phase === 'build' || v.phase === 'preview' || v.phase === 'spin') {
+      clearTimeout(endTimer); show('game'); renderGame(v);
+      if (pendingSpin) { var pv = pendingSpin; pendingSpin = null; if (v.phase === 'spin') startSpin(pv); }
+      return;
+    }
     // end：最後のしるしの演出を見せてから結果へ
     renderGame(v);
     var wait = endShowAt - Date.now();
@@ -613,7 +815,7 @@
     else { show('end'); renderEnd(v); }
   }
   function colorOf(i) { return COLORS[i % COLORS.length].c; }
-  function seatOfView(v, i) { var sid = v.g.pids[i]; return v.seats.filter(function (s) { return s.sid === sid; })[0] || { name: '?', kind: 'remote', connected: false }; }
+  function seatOfView(v, i) { var sid = (v.pids || v.g.pids)[i]; return v.seats.filter(function (s) { return s.sid === sid; })[0] || { name: '?', kind: 'remote', connected: false }; }
 
   function renderLobby(v) {
     var isHost = !!host;
@@ -643,6 +845,10 @@
       $(id).classList.toggle('ro', !isHost);
     }
     seg('wallSeg', WALL_OPTS, v.opts.walls); seg('bumpSeg', BUMP_OPTS, v.opts.bumps); seg('cpuSeg', CPU_OPTS, v.opts.cpu);
+    seg('buildSeg', BUILD_OPTS, v.opts.build); seg('peekSeg', PEEK_OPTS, v.opts.peek); seg('spinSeg', SPIN_OPTS, v.opts.spin);
+    var seen = v.opts.build === 'build' || v.opts.peek > 0;
+    $('spinHint').textContent = v.opts.spin === 'none' ? '' : seen ? '壁を見たあと、地下の壁だけが回ります（しるし・角・駒はそのまま）。回る回数と向きはアニメで全員に見えます。' : '※「ランダム」＋見せる時間「なし」では壁をだれも見ないので、回転はしません。';
+    $('peekHint').textContent = v.opts.peek > 0 ? 'ゲームの最初に全員が迷路を' + v.opts.peek + '秒だけ見られます。そのあと壁は消えます。' : v.opts.build === 'build' ? '迷路づくりで見た壁を覚えておこう。' : '公式どおり、壁はだれも見ないまま始まります。';
     $('startBtn').disabled = n < 2 || n > MAXP;
     $('startBtn').textContent = n < 2 ? 'あと' + (2 - n) + '人でスタートできます' : 'ゲーム開始！（' + n + '人）';
     $('leaveBtn1').textContent = isHost ? '部屋を閉じる' : '部屋を出る';
@@ -663,14 +869,14 @@
     if (el._built) return;
     var h = '<div class="cells">';
     for (var c = 0; c < 36; c++) h += '<div class="cell" data-c="' + c + '"><span class="s"></span></div>';
-    h += '</div><svg class="ov"></svg>';
+    h += '</div><svg class="ov"></svg><div class="gaps"></div>';
     for (var p = 0; p < 4; p++) h += '<div class="pawn" data-p="' + p + '" style="display:none"><div class="body"></div></div>';
     el.innerHTML = h; el._built = true;
   }
   var anim = null;   // 壁にぶつかった駒を、ぶつかったマスに少しのあいだ見せる
   function renderBoard(el, v, opt) {
     buildBoard(el);
-    var g = v.g, geo = boardGeom(el), me = myP(v);
+    var g = opt.g || v.g, geo = boardGeom(el), me = myP(v);
     var collected = {}; g.players.forEach(function (p) { p.got.forEach(function (s) { collected[s] = true; }); });
     var homes = {}; g.players.forEach(function (p, i) { homes[p.start] = i; });
     var canD = {};
@@ -696,6 +902,9 @@
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + W);
     svg.style.inset = '4px'; svg.style.width = svg.style.height = W + 'px';
     if (g.walls) g.walls.forEach(function (e) { var L = edgeLine(geo, e); out += '<line x1="' + L.x1 + '" y1="' + L.y1 + '" x2="' + L.x2 + '" y2="' + L.y2 + '" stroke="#ffd166" stroke-width="6" stroke-linecap="round" style="filter:drop-shadow(0 0 4px #ffd166)"/>'; });
+    // 迷路づくり・見せる時間の壁（組み立て中は置いた人の色）
+    if (opt.walls) opt.walls.forEach(function (w) { var L = edgeLine(geo, w.e); out += '<line class="sw' + (w.nw ? ' nw' : '') + '" x1="' + L.x1 + '" y1="' + L.y1 + '" x2="' + L.x2 + '" y2="' + L.y2 + '" stroke="' + (w.c || '#ffd166') + '" stroke-width="6" stroke-linecap="round" style="filter:drop-shadow(0 0 4px ' + (w.c || '#ffd166') + ')"/>'; });
+    if (opt.gaps) renderGaps(el, geo, opt.gaps);
     if (g.bumps) {
       var seenE = {};
       g.bumps.forEach(function (b) {
@@ -734,11 +943,25 @@
       var st = seatOfView(v, p); pe.firstChild.textContent = st.kind === 'cpu' ? BEAR : '';
     }
   }
+  function renderGaps(el, geo, o) {
+    var box = el.querySelector('.gaps');
+    if (box._cell !== geo.cell) {
+      var h = '', t = Math.max(18, geo.gap + 14), len = geo.cell * 0.86;
+      for (var e = 0; e < MG.EDGES; e++) {
+        var L = edgeLine(geo, e), v = L.x1 === L.x2;
+        h += '<button class="gap ' + (v ? 'v' : 'h') + '" data-e="' + e + '" aria-label="すき間' + e + '" style="left:' + (L.mx - (v ? t : len) / 2) + 'px;top:' + (L.my - (v ? len : t) / 2) + 'px;width:' + (v ? t : len) + 'px;height:' + (v ? len : t) + 'px"></button>';
+      }
+      box.innerHTML = h; box._cell = geo.cell;
+    }
+    box.classList.toggle('mine', !!o.mine);
+    var on = {}, blk = {}; o.walls.forEach(function (e) { on[e] = true; }); (o.blocked || []).forEach(function (e) { blk[e] = true; });
+    Array.prototype.forEach.call(box.children, function (b) { var e = +b.dataset.e, cls = 'gap ' + (b.classList.contains('v') ? 'v' : 'h') + (on[e] ? ' on' : '') + (blk[e] ? ' blk' : '') + (b.classList.contains('nofx') ? ' nofx' : ''); if (b.className !== cls) b.className = cls; });
+  }
   function fitBoard() {
     var w = $('boardWrap'), b = $('board'); if (!$('game').classList.contains('active')) return;
     var size = Math.floor(Math.min(w.clientWidth - 2, w.clientHeight - 4));
     size = Math.max(200, Math.min(size, 520));
-    if (b.style.getPropertyValue('--bs') !== size + 'px') { b.style.setProperty('--bs', size + 'px'); if (lastView && lastView.g) renderBoard(b, lastView, { interactive: true }); }
+    if (b.style.getPropertyValue('--bs') !== size + 'px') { b.style.setProperty('--bs', size + 'px'); if (lastView && (lastView.g || lastView.b)) renderGame(lastView); }
   }
   window.addEventListener('resize', function () { fitBoard(); });
 
@@ -746,8 +969,15 @@
   function dieFace(n) { var on = PIPS[n] || []; var h = ''; for (var i = 0; i < 9; i++) h += '<i class="' + (on.indexOf(i) >= 0 ? 'on' : '') + '"></i>'; return h; }
   var rollAnim = { until: 0, t: null };
 
+  function buildG(v) {
+    var starts = MG.CORNER_SETS[v.pids.length] || MG.CORNERS;
+    var sym = []; for (var c = 0; c < 36; c++) sym.push(-1);
+    return { symAt: sym, cellOf: [], players: starts.map(function (st) { return { start: st, pos: st, got: [] }; }), path: [], pathBy: -1, target: -1,
+      turn: v.b.turn, over: false, stage: 'build', roll: 0, left: 0, deckLeft: MG.SYMBOLS.length, pids: v.pids };
+  }
   function renderGame(v) {
-    var g = v.g; if (!g) return;
+    var build = v.phase === 'build' && v.b, g = v.g || (build ? buildG(v) : null); if (!g) return;
+    $('game').dataset.mode = build ? 'build' : v.phase === 'preview' || v.phase === 'spin' ? v.phase : 'play';
     $('codeChip').textContent = v.code;
     var me = myP(v), np = g.players.length;
     $('players').style.setProperty('--np', np);
@@ -765,12 +995,21 @@
     if (g.target >= 0) { $('tSym').textContent = MG.SYMBOLS[g.target].e; $('tName').textContent = MG.SYMBOLS[g.target].n; }
     else { $('tSym').textContent = '🏆'; $('tName').textContent = 'ゲーム終了'; }
     $('tDeck').innerHTML = 'のこりのしるし<br><b>' + g.deckLeft + '</b>こ';
-    renderBoard($('board'), v, { interactive: true });
+    var bopt = { interactive: true, g: build ? g : null };
+    if (build) {
+      var bw = v.b.walls, lastW = bw[bw.length - 1], myB = me >= 0 && v.b.turn === me && v.seats[v.you].kind !== 'cpu';
+      bopt.walls = bw.map(function (w, k) { return { e: w.e, c: w.p >= 0 ? colorOf(w.p) : '#ffd166', nw: k === bw.length - 1 }; });
+      bopt.gaps = { walls: bw.map(function (w) { return w.e; }), mine: myB, blocked: myB ? MG.blockedEdges(bw.map(function (w) { return w.e; })) : [] };
+    } else if (v.intro && v.intro.kind === 'preview') bopt.walls = v.intro.walls.map(function (e) { return { e: e }; });
+    renderBoard($('board'), v, bopt);
     $('log').innerHTML = (v.log || []).slice(0, 3).map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('');
+    if (build) { renderBuildPanel(v, me, myB, lastW); hostBar(v, seatOfView(v, v.b.turn)); fitBoard(); return; }
     // 手番
     var cur = g.over ? null : seatOfView(v, g.turn), mine = myTurn(v), locked = actLock === lockKey(v), rolling = Date.now() < rollAnim.until;
     var st;
-    if (!cur) st = 'ゲーム終了！';
+    if (v.phase === 'preview') st = '👀 迷路をおぼえよう！ のこり <b id="stSec">' + Math.max(0, Math.ceil((introDeadline - Date.now()) / 1000)) + '</b> 秒';
+    else if (v.phase === 'spin') st = '🌀 迷路がまわる！ 回数と向きを見て！';
+    else if (!cur) st = 'ゲーム終了！';
     else if (mine && g.stage === 'roll') st = 'あなたの番！ サイコロをタップしてふろう';
     else if (mine) st = rolling ? 'コロコロ…' : 'のこり' + g.left + '歩：矢印かマスをタップ';
     else if (cur.kind === 'cpu') st = esc(who(cur)) + (g.stage === 'roll' ? 'の番クマ' : 'が迷路を進んでいるクマ') + '<span class="dots"></span>';
@@ -785,18 +1024,108 @@
     if (g.stage === 'move' && !rolling) {
       var dots = ''; for (var q = 0; q < g.roll; q++) dots += '<i class="' + (q < g.left ? 'on' : '') + '"></i>';
       $('stepsLeft').innerHTML = 'のこり <b>' + g.left + '</b> 歩<div class="steps">' + dots + '</div>';
-    } else $('stepsLeft').innerHTML = g.over ? '' : '<span style="opacity:.75">サイコロの目（1〜4）だけ進めます</span>';
+    } else $('stepsLeft').innerHTML = g.over ? '' : v.phase !== 'play' ? '<span style="opacity:.75">まもなくスタート</span>' : '<span style="opacity:.75">サイコロの目（1〜4）だけ進めます</span>';
     var canMove = mine && g.stage === 'move' && !locked && !rolling;
     $('stopBtn').disabled = !(canMove && clientCanStop(g, me));
     Array.prototype.forEach.call($('dpad').querySelectorAll('button'), function (b) { b.disabled = !(canMove && clientCanStep(g, me, b.dataset.d)); });
     $('dpadC').style.background = me >= 0 ? colorOf(me) : '';
-    // ホスト：手番の人が切断中なら交代を提案
+    hostBar(v, v.phase === 'play' ? cur : null);
+    fitBoard();
+  }
+  // ホスト：手番の人が切断中なら交代を提案
+  function hostBar(v, cur) {
     var hb = $('hostbar');
     if (host && cur && cur.kind === 'remote' && !cur.connected && hb.dataset.dismiss !== String(cur.sid)) {
-      hb.innerHTML = '<span>⚠️ ' + esc(san(cur.name)) + 'の接続が切れています</span><button class="y" data-repl="' + cur.sid + '">' + BEAR + 'ふーさんに交代</button><button class="n" data-wait="' + cur.sid + '">待つ</button>';
+      var h = '<span>⚠️ ' + esc(san(cur.name)) + 'の接続が切れています</span><button class="y" data-repl="' + cur.sid + '">' + BEAR + 'ふーさんに交代</button><button class="n" data-wait="' + cur.sid + '">待つ</button>';
+      if (hb._html !== h) { hb._html = h; hb.innerHTML = h; }
       hb.classList.add('show');
     } else hb.classList.remove('show');
-    fitBoard();
+  }
+  function renderBuildPanel(v, me, mine, lastW) {
+    var b = v.b, n = b.walls.length, cur = seatOfView(v, b.turn);
+    $('bCount').textContent = n; $('bTarget').textContent = b.target;
+    $('bProg').style.width = Math.round(100 * n / b.target) + '%';
+    var st;
+    if (mine) st = '🧱 あなたの番！ 壁を置きたい<b>すき間</b>をタップ';
+    else if (cur.kind === 'cpu') st = esc(who(cur)) + 'が壁の場所を考え中クマ<span class="dots"></span>';
+    else if (!cur.connected) st = esc(san(cur.name)) + 'の再接続を待っています<span class="dots"></span>';
+    else st = esc(san(cur.name)) + 'が壁を置くのを待っています<span class="dots"></span>';
+    $('bStatus').innerHTML = st;
+    var canUndo = !!lastW && lastW.p === me && me >= 0 && v.seats[v.you].kind !== 'cpu';
+    $('undoBtn').style.display = canUndo ? '' : 'none';
+    $('bHint').textContent = canUndo ? '次の人が置くまでは、取り消せます' : mine ? '赤いすき間は、置くとたどり着けないマスができるので置けません' : 'どのマスにも行けるように、順番に置いていきます';
+  }
+
+  // ---- はじめに迷路を見せる時間・回転 ----
+  var pendingSpin = null, introKey = '', introDeadline = 0, introTimer = null, spinRun = null, prevPhase = '', lastTick = -1;
+  function ghostEl() {
+    var b = $('board'), gh = b.querySelector('.ghost');
+    if (!gh) { var clip = document.createElement('div'); clip.className = 'ghostclip'; gh = document.createElement('div'); gh.className = 'ghost'; clip.appendChild(gh); b.appendChild(clip); }
+    return gh;
+  }
+  function clearGhost() { var gh = $('board').querySelector('.ghostclip'); if (gh) gh.remove(); if (spinRun) { cancelAnimationFrame(spinRun.raf); spinRun = null; } }
+  function fadeBoardWalls() {
+    var svg = $('board').querySelector('svg.ov'); if (!svg || !svg.querySelector('line.sw')) return;
+    var cl = svg.cloneNode(true); cl.classList.remove('ov'); cl.classList.add('wallfade');
+    Array.prototype.forEach.call(cl.querySelectorAll(':not(line.sw)'), function (n) { if (n.tagName !== 'svg') n.remove(); });
+    $('board').appendChild(cl); setTimeout(function () { cl.remove(); }, 1000);
+  }
+  function introUi(v) {
+    var ph = v.phase, key = v.gameNo + ':' + ph;
+    if (v.intro) introDeadline = Date.now() + v.intro.left;
+    if (key !== introKey) {
+      var from = prevPhase; introKey = key; prevPhase = ph;
+      if (ph === 'play' && (from === 'preview' || from === 'build')) { fadeBoardWalls(); Snd.hide(); toast('壁が見えなくなりました。覚えたかな？'); }
+      if (ph === 'preview' && from === 'build') toast('🏰 迷路が完成！');
+      if (ph !== 'spin') clearGhost();
+      if (ph === 'spin' && v.intro && v.intro.spin) pendingSpin = v;   // 盤を描いたあとで開始
+      clearInterval(introTimer); lastTick = -1;
+      if (ph === 'preview') introTimer = setInterval(tickIntro, 200);
+    }
+    if (ph === 'preview' || ph === 'spin') { $('introBar').dataset.kind = ph; tickIntro(); }
+  }
+  function tickIntro() {
+    var v = lastView; if (!v || v.phase !== 'preview') { if (v && v.phase !== 'spin') clearInterval(introTimer); return; }
+    var left = Math.max(0, introDeadline - Date.now()), sec = Math.ceil(left / 1000), ms = (v.intro && v.intro.ms) || 1;
+    $('introTitle').textContent = '👀 迷路をおぼえよう！';
+    $('introNum').textContent = sec;
+    $('introSub').textContent = v.opts.spin !== 'none' ? 'このあと壁が消えて、迷路がまわります' : 'このあと壁は見えなくなります';
+    $('introProg').style.width = (100 * left / ms).toFixed(1) + '%';
+    $('introNum').classList.toggle('hurry', sec <= 3);
+    var ss = $('stSec'); if (ss) ss.textContent = sec;
+    if (sec !== lastTick) { if (lastTick !== -1 && sec <= 3 && sec > 0) Snd.tick(false); lastTick = sec; }
+  }
+  function startSpin(v) {
+    clearGhost();
+    var sp = v.intro.spin, gh = ghostEl(), geo = boardGeom($('board')), W = geo.inner, h = '';
+    // 回転前の壁（見せる時間に見えたもの）の「影」が、盤の下でまわる
+    h += '<rect x="-2" y="-2" width="' + (W + 4) + '" height="' + (W + 4) + '" rx="12" fill="rgba(140,120,255,.10)" stroke="rgba(255,209,102,.7)" stroke-width="2" stroke-dasharray="7 6"/>';
+    h += '<path d="M' + (W / 2 - 10) + ',13 L' + (W / 2) + ',2 L' + (W / 2 + 10) + ',13 Z" fill="#ffd166" opacity=".95"/>';   // 向きの目印（迷路の「上」）
+    v.intro.walls.forEach(function (e) { var L = edgeLine(geo, e); h += '<line x1="' + L.x1 + '" y1="' + L.y1 + '" x2="' + L.x2 + '" y2="' + L.y2 + '" stroke="#ffd166" stroke-width="6" stroke-linecap="round" opacity=".9" style="filter:drop-shadow(0 0 5px #ffd166)"/>'; });
+    gh.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + W + '" style="width:' + W + 'px;height:' + W + 'px">' + h + '</svg>';
+    gh.style.width = gh.style.height = W + 'px'; gh.parentNode.style.width = gh.parentNode.style.height = W + 'px';
+    $('introNum').classList.remove('hurry');
+    var t0 = Date.now() - (v.intro.ms - v.intro.left), total = spinTotal(sp), snd = -1;
+    spinRun = { raf: 0, sp: sp };
+    var dirTxt = sp.dir > 0 ? '右回り ↻' : '左回り ↺';
+    $('introTitle').textContent = '🌀 迷路がまわる！';
+    function frame() {
+      if (!spinRun) return;
+      var t = Date.now() - t0, st = spinState(sp, Math.min(t, total));
+      gh.style.transform = 'scaleX(' + st.sx.toFixed(4) + ') rotate(' + st.angle.toFixed(2) + 'deg)';
+      gh.style.opacity = st.op.toFixed(3);
+      var stepNo = st.phase === 'rot' ? Math.min(sp.n, st.done + (Math.abs(st.angle % 90) > 0.01 ? 1 : 0)) || st.done : st.done;
+      if (st.phase === 'lead') { $('introNum').textContent = sp.dir > 0 ? '↻' : '↺'; $('introSub').textContent = dirTxt + 'に まわるよ…'; }
+      else if (st.phase === 'rot') { $('introNum').textContent = stepNo + '回'; $('introSub').textContent = dirTxt + '  ' + stepNo + '回目'; }
+      else if (st.phase === 'flip') { $('introNum').textContent = '⇋'; $('introSub').textContent = '左右反転！'; }
+      else { $('introNum').textContent = sp.n + '回'; $('introSub').textContent = dirTxt + 'に' + sp.n + '回' + (sp.flip ? '＋左右反転' : '') + '！'; }
+      $('introProg').style.width = (100 * Math.max(0, total - t) / total).toFixed(1) + '%';
+      var sk = st.phase === 'rot' ? stepNo : st.phase === 'flip' ? 99 : -1;
+      if (sk > 0 && sk !== snd && (st.phase === 'flip' || Math.abs(st.angle % 90) > 0.01)) { snd = sk; Snd.whoosh(); }
+      window.__lb.spin = { t: t, total: total, phase: st.phase, angle: st.angle, sx: st.sx, done: st.done };
+      if (t < total + 50) spinRun.raf = requestAnimationFrame(frame);
+    }
+    frame();
   }
 
   // ---- 演出 ----
@@ -805,8 +1134,13 @@
   $('drama').addEventListener('click', hideDrama);
   function bubble(p, text) {
     if (!text) return;
+    setTimeout(function () { bubbleNow(p, text); }, 0);
+  }
+  function bubbleNow(p, text) {
     var row = document.querySelector('#players .pl[data-p="' + p + '"]'); if (!row) return;
     var b = document.createElement('div'); b.className = 'bubble'; b.textContent = text; row.appendChild(b);
+    var r = b.getBoundingClientRect();   // 画面の端からはみ出さないように
+    if (r.right > window.innerWidth - 4) b.classList.add('r'); else if (r.left < 4) b.classList.add('l');
     setTimeout(function () { b.remove(); }, 2300);
   }
   function showDrama(kind, html, ms) {
@@ -820,6 +1154,8 @@
     if (!ev || ev.id === lastEvId) return;
     if (ev.id < lastEvId) { lastEvId = ev.id; return; }             // ホストの再開・新しいゲーム
     lastEvId = ev.id;
+    if (ev.type === 'wall' || ev.type === 'unwall') { if (ev.type === 'wall') Snd.place(); bubble(ev.p, ev.line); return; }
+    if (ev.type === 'spun') { (ev.lines || []).forEach(function (l, k) { setTimeout(function () { bubble(l.p, l.line); }, 300 + k * 500); }); return; }
     var g = v.g, s = seatOfView(v, ev.p), nm = s.kind === 'cpu' ? who(s) : s.name, mine = ev.p === myP(v);
     if (ev.type === 'roll') {
       Snd.roll();
@@ -884,6 +1220,7 @@
         '<span class="syms">' + p.got.map(function (x) { return MG.SYMBOLS[x].e; }).join('') + '</span><span class="n">' + p.got.length + '</span><span class="hits">💥' + (g.hitCount ? g.hitCount[i] : 0) + '回</span></div>';
     }).join('');
     $('wallCount').textContent = (g.walls || []).length;
+    $('spinNote').textContent = g.spin ? '🌀 この迷路は最初に' + (g.spin.dir > 0 ? '右回り↻' : '左回り↺') + 'に' + g.spin.n + '回' + (g.spin.flip ? '＋左右反転' : '') + 'まわりました（上の図は回ったあとの本当の壁）' : '';
     var rb = $('revealBoard'), size = Math.min(window.innerWidth - 44, 380);
     rb.style.setProperty('--bs', size + 'px');
     renderBoard(rb, v, { interactive: false, trail: false });

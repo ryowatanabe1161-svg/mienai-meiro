@@ -85,6 +85,59 @@
     return d;
   }
 
+  function reach(wallSet, from) {
+    var seen = {}, out = [from], q = [from]; seen[from] = true;
+    while (q.length) { var c = q.shift(); cellNeighbors(c).forEach(function (m) { if (!seen[m] && !wallSet[edgeId(c, m)]) { seen[m] = true; out.push(m); q.push(m); } }); }
+    return out.sort(function (a, b) { return a - b; });
+  }
+
+  // ---- みんなで壁を決める（組み立て） ----
+  // 1枚置けるか：{ ok } または { ok:false, why:'range'|'used'|'full'|'cut', cut:[行けなくなるマス] }
+  function checkWall(list, e, max) {
+    if (typeof e !== 'number' || e !== Math.floor(e) || e < 0 || e >= EDGES) return { ok: false, why: 'range' };
+    if (list.indexOf(e) >= 0) return { ok: false, why: 'used' };
+    if (max != null && list.length >= max) return { ok: false, why: 'full' };
+    var set = wallSetOf(list); set[e] = true;
+    if (!isConnected(set)) {
+      var ab = edgeCells(e), ra = reach(set, ab[0]), rb = reach(set, ab[1]);
+      return { ok: false, why: 'cut', cut: ra.length <= rb.length ? ra : rb };
+    }
+    return { ok: true };
+  }
+  // 置くと迷路が分かれてしまう辺の一覧（画面で「置けない」と示す）
+  function blockedEdges(list) {
+    var set = wallSetOf(list), out = [];
+    for (var e = 0; e < EDGES; e++) { if (set[e]) continue; set[e] = true; if (!isConnected(set)) out.push(e); delete set[e]; }
+    return out;
+  }
+  // のこりをランダムに埋める（つながりを保つ）。25枚までは必ず埋められる
+  function fillWalls(list, count, rng) {
+    var set = wallSetOf(list), out = list.slice();
+    var order = shuffle(Array.from({ length: EDGES }, function (_, i) { return i; }), rng);
+    for (var i = 0; i < order.length && out.length < count; i++) {
+      var e = order[i]; if (set[e]) continue;
+      set[e] = true; if (isConnected(set)) out.push(e); else delete set[e];
+    }
+    return out;
+  }
+
+  // ---- 盤の回転・反転（動くのは地下の壁だけ。しるし・角・駒はそのまま） ----
+  // xf = { k: 時計回りに90°を何回分（0〜3）, flip: 回したあと左右反転 }
+  function xfCell(cell, xf) {
+    var p = rc(cell), r = p.r, c = p.c, k = (((xf && xf.k) | 0) % 4 + 4) % 4;
+    for (var i = 0; i < k; i++) { var t = r; r = c; c = N - 1 - t; }   // 時計回り90°：(r,c) → (c, 5-r)
+    if (xf && xf.flip) c = N - 1 - c;
+    return r * N + c;
+  }
+  function xfEdge(e, xf) { var ab = edgeCells(e); return edgeId(xfCell(ab[0], xf), xfCell(ab[1], xf)); }
+  function xfWalls(list, xf) { return list.map(function (e) { return xfEdge(e, xf); }).sort(function (a, b) { return a - b; }); }
+  // mode: 'rot'＝90°×1〜3回（向きはランダム）、'flip'＝それに加えて半分の確率で左右反転
+  function makeSpin(mode, rng) {
+    if (mode !== 'rot' && mode !== 'flip') return null;
+    var n = 1 + Math.floor(rng() * 3), dir = rng() < 0.5 ? 1 : -1;
+    return { n: n, dir: dir, k: ((n * dir) % 4 + 4) % 4, flip: mode === 'flip' && rng() < 0.5 };
+  }
+
   // ---- ゲーム ----
   // cfg: { players: n(2-4), walls: 19|24, seed }
   function createGame(cfg) {
@@ -110,6 +163,15 @@
     };
     G.rngState = Math.floor(rng() * 4294967296);
     drawTarget(G, []);
+    return G;
+  }
+  // はじめに迷路を見せる／回転する設定をゲームに組み込む（ホスト用）。
+  // shown＝みんなが見た（回転前の）壁。実際にプレイで使う壁は回転・反転したあとの配置。
+  function setupIntro(G, o) {
+    var shown = (o.shown || G.walls).slice().sort(function (a, b) { return a - b; });
+    G.walls = o.xf ? xfWalls(shown, o.xf) : shown.slice();
+    G.xf = o.xf || null;
+    G.introInfo = { shown: shown, xf: o.xf || null, secs: o.secs || 0, built: !!o.built, mine: o.mine || {} };
     return G;
   }
   function nextRand(G) { var r = mulberry(G.rngState); var v = r(); G.rngState = Math.floor(r() * 4294967296); return v; }
@@ -197,9 +259,10 @@
   // 記憶力：own＝自分がぶつかった壁、other＝ほかの人がぶつかった壁、open＝誰かが通れた道
   var CPU_LEVELS = {
     // keep＝おぼえている確率、fade＝何ターンで半分忘れるか（0＝忘れない）、floor＝どれだけ時間がたっても残る割合
-    easy: { own: 0.9, other: 0.55, open: 0.45, fade: 24, floor: 0.45, pen: 0.3, label: 'やさしい' },
-    normal: { own: 1, other: 0.9, open: 0.75, fade: 0, floor: 1, pen: 0.7, label: 'ふつう' },
-    strong: { own: 1, other: 1, open: 1, fade: 0, floor: 1, pen: 1.4, label: 'つよい' }
+    // peek＝はじめに見た迷路をどれだけ覚えるか、rotOk＝回転を正しく数えられる確率、trust＝覚えている壁をどれだけ信じて避けるか
+    easy: { own: 0.9, other: 0.55, open: 0.45, fade: 24, floor: 0.45, pen: 0.3, peek: 0.4, rotOk: 0.5, trust: 5, label: 'やさしい' },
+    normal: { own: 1, other: 0.9, open: 0.75, fade: 0, floor: 1, pen: 0.7, peek: 0.7, rotOk: 0.85, trust: 20, label: 'ふつう' },
+    strong: { own: 1, other: 1, open: 1, fade: 0, floor: 1, pen: 1.4, peek: 0.95, rotOk: 1, trust: 40, label: 'つよい' }
   };
   // その CPU が「おぼえている」壁と道。公開情報 G.pub だけを使う（G.walls は見ない）
   function cpuMemory(pub, me, level, salt, nowTurn) {
@@ -216,12 +279,35 @@
     }
     return { wall: wall, open: open };
   }
-  // 目標までの道を考える（知っている壁は通らない／知らない道は少しこわい）
-  function cpuPlan(pubView, me, level, salt) {
+  // はじめに見た迷路（見せる時間・みんなで組み立て）の記憶。人間が見られたものだけ：
+  // intro = { shown: 回転前に見えた壁, xf: 回転（アニメで全員が見た回数・向き）, secs: 見せた秒数, built: 組み立てを見ていた, mine: {人: [自分で置いた壁]} }
+  // 覚えている割合は記憶力×見た時間。回転は「数え間違える」こともある（やさしい・ふつう）。
+  function cpuIntroBelief(intro, me, level, salt, nowTurn) {
+    if (!intro || !intro.shown || (!intro.built && !intro.secs)) return null;
+    var L = CPU_LEVELS[level] || CPU_LEVELS.normal;
+    var look = intro.built ? 1 : Math.min(1, 0.35 + 0.65 * intro.secs / 20);
+    var xf = intro.xf ? { k: intro.xf.k, flip: !!intro.xf.flip } : { k: 0, flip: false }, wrong = false;
+    if (intro.xf && hash01(salt, me * 31 + 5, 77) >= L.rotOk) { wrong = true; xf.k = (xf.k + (hash01(salt, me, 91) < 0.5 ? 1 : 3)) % 4; }
+    var age = Math.max(0, (nowTurn || 1) - 1), fade = L.fade ? Math.max(L.floor, Math.pow(0.5, age / L.fade)) : 1;
+    var shown = wallSetOf(intro.shown), mine = wallSetOf(intro.mine && intro.mine[me]), wall = {}, open = {};
+    for (var e = 0; e < EDGES; e++) {
+      var keep = L.peek * look * fade;
+      if (mine[e]) keep = Math.max(keep, Math.min(1, L.peek + 0.3) * fade);   // 自分で置いた壁はよく覚えている
+      if (hash01(salt, me * 1000 + e * 7 + 3, 5) < keep) { var t = xfEdge(e, xf); if (shown[e]) wall[t] = true; else open[t] = true; }
+    }
+    return { wall: wall, open: open, wrong: wrong };
+  }
+  // 目標までの道を考える（知っている壁は通らない／知らない道は少しこわい／はじめに見た迷路の記憶も使う）
+  function cpuPlan(pubView, me, level, salt, intro) {
     var L = CPU_LEVELS[level] || CPU_LEVELS.normal;
     var V = pubView, mem = cpuMemory(V.pub, me, level, salt, V.turnNo);
+    var bel = cpuIntroBelief(intro, me, level, salt, V.turnNo);
+    // プレイ中に自分の目で確かめたこと（通れた・ぶつかった）が、はじめの記憶より優先
+    var knownOpen = function (e) { return !!mem.open[e] || (!!bel && !!bel.open[e] && !mem.wall[e]); };
+    var believedWall = function (e) { return !!bel && !!bel.wall[e] && !mem.open[e]; };
+    mem.knownOpen = knownOpen;
     var start = V.players[me].pos, goal = V.target >= 0 ? V.cellOf[V.target] : -1;
-    if (goal < 0) return { dirs: [], mem: mem };
+    if (goal < 0) return { dirs: [], mem: mem, bel: bel };
     var dist = [], prev = [], done = [];
     for (var i = 0; i < CELLS; i++) { dist[i] = Infinity; prev[i] = -1; done[i] = false; }
     dist[start] = 0;
@@ -233,18 +319,18 @@
       cellNeighbors(u).forEach(function (m) {
         var e = edgeId(u, m);
         if (mem.wall[e]) return;
-        var w = 1 + (mem.open[e] ? 0 : L.pen) + hash01(salt, e, V.turnNo) * 0.05;
+        var w = 1 + (knownOpen(e) ? 0 : L.pen) + (believedWall(e) ? L.trust : 0) + hash01(salt, e, V.turnNo) * 0.05;
         if (dist[u] + w < dist[m]) { dist[m] = dist[u] + w; prev[m] = u; }
       });
     }
     var path = [];
     if (dist[goal] < Infinity) { for (var c = goal; c !== start; c = prev[c]) path.unshift(c); }
-    return { path: path, mem: mem, cost: dist[goal] };
+    return { path: path, mem: mem, bel: bel, cost: dist[goal] };
   }
   // サイコロの目に合わせて実際に進む方向の列（止まれないマスでは終わらないよう調整）
   function cpuMoves(G, me, level, salt) {
     var V = publicView(G);
-    var plan = cpuPlan(V, me, level, salt);
+    var plan = cpuPlan(V, me, level, salt, G.introInfo);   // introInfo はホストだけが持つ（参加者には送らない）
     var path = plan.path || [], take = Math.min(G.left, path.length);
     var occ = function (cell) { return !canEndAt(G, me, cell) && !(G.target >= 0 && G.symAt[cell] === G.target); };
     // つよい：知らない道で遠くまで行き過ぎない（スタートから遠いほど、壁に当たったときの損が大きい）
@@ -252,7 +338,7 @@
       var unknown = 0, safeTake = take;
       for (var s = 0; s < take; s++) {
         var a = s === 0 ? G.players[me].pos : path[s - 1], b = path[s];
-        if (!plan.mem.open[edgeId(a, b)]) { unknown++; if (unknown > 2) { safeTake = s; break; } }
+        if (!plan.mem.knownOpen(edgeId(a, b))) { unknown++; if (unknown > 2) { safeTake = s; break; } }
       }
       take = Math.max(1, safeTake);
     }
@@ -281,7 +367,9 @@
     rc: rc, neighbor: neighbor, dirTo: dirTo, edgeId: edgeId, edgeCells: edgeCells, cellNeighbors: cellNeighbors,
     mulberry: mulberry, shuffle: shuffle, isConnected: isConnected, openings: openings, genWalls: genWalls, wallSetOf: wallSetOf, bfsDist: bfsDist,
     createGame: createGame, roll: roll, canStep: canStep, canStop: canStop, legalDirs: legalDirs, step: step, stop: stop,
-    canEndAt: canEndAt, occupant: occupant, cpuMemory: cpuMemory, cpuPlan: cpuPlan, cpuMoves: cpuMoves, publicView: publicView
+    canEndAt: canEndAt, occupant: occupant, cpuMemory: cpuMemory, cpuPlan: cpuPlan, cpuMoves: cpuMoves, publicView: publicView,
+    reach: reach, checkWall: checkWall, blockedEdges: blockedEdges, fillWalls: fillWalls,
+    xfCell: xfCell, xfEdge: xfEdge, xfWalls: xfWalls, makeSpin: makeSpin, cpuIntroBelief: cpuIntroBelief, setupIntro: setupIntro
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.MazeGame = api;
 })(this);
